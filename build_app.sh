@@ -60,7 +60,11 @@ source .venv-build/bin/activate
 # uv 的 pip 速度更快,且能正确解析现代 wheel metadata,避免旧版 pip
 # 报 "No matching distribution found" 的问题。
 echo "==> 安装构建依赖"
-uv pip install --upgrade pip setuptools wheel
+# 关键:锁定 setuptools<81。setuptools 81+ 在检测到 pyproject.toml [project]
+# 表后,会拒绝 py2app 依赖的旧式 setup() 调用语义,报
+# "error: install_requires is no longer supported"。py2app 社区通用解法
+# 是构建时固定 setuptools<81。
+uv pip install --upgrade "pip<81" "setuptools<81" "wheel"
 uv pip install -r requirements.txt py2app
 uv pip install -e .
 

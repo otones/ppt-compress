@@ -92,7 +92,6 @@ OPTIONS = {
 }
 
 setup(
-    name="PPTXCompressor",
     app=APP,
     options={"py2app": OPTIONS},
 )
