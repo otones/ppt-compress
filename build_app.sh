@@ -40,9 +40,10 @@ before_bytes=$(du -sk "$APP" | awk '{print $1}')
 echo "==> py2app 产出体积:${before_bytes} KB"
 
 # =========================================================================
-# 瘦身阶段:py2app 即便排除了子模块,仍会把 PySide6 包目录(含 Qt 插件、
-# 翻译、QML、文档、示例)整目录拷进 .app。这里做后处理,删除 GUI 用不到
-# 的资源。GUI 只用 QtCore/QtGui/QtWidgets。
+# 瘦身阶段:setup.py 的 packages:["PySide6"] 会把整个 PySide6 目录(含
+# Qt 全部框架)整包拷进 .app,excludes 对此不生效。真正的大头是
+# PySide6/Qt/lib/*.framework —— QtWebEngineCore 一个就 ~300MB。这里用
+# 白名单方式:只保留 QtWidgets 应用必需的框架,其余全删。
 # =========================================================================
 echo "==> 瘦身:删除冗余 Qt 资源"
 
@@ -52,83 +53,105 @@ PYSIDE6_DIR=$(find "$APP/Contents/Resources" -type d -name PySide6 2>/dev/null |
 if [ -n "$PYSIDE6_DIR" ] && [ -d "$PYSIDE6_DIR" ]; then
     echo "   PySide6 目录:$PYSIDE6_DIR"
 
-    # 1) 删除被排除的子模块 .so / .pyi(防止漏网)
-    rm -f "$PYSIDE6_DIR"/QtWebEngine*.so
-    rm -f "$PYSIDE6_DIR"/QtQml*.so
-    rm -f "$PYSIDE6_DIR"/QtQuick*.so
-    rm -f "$PYSIDE6_DIR"/Qt3D*.so
-    rm -f "$PYSIDE6_DIR"/QtCharts*.so
-    rm -f "$PYSIDE6_DIR"/QtDataVisualization*.so
-    rm -f "$PYSIDE6_DIR"/QtPdf*.so
-    rm -f "$PYSIDE6_DIR"/QtMultimedia*.so
-    rm -f "$PYSIDE6_DIR"/QtNetwork*.so
-    rm -f "$PYSIDE6_DIR"/QtBluetooth*.so
-    rm -f "$PYSIDE6_DIR"/QtSensors*.so
-    rm -f "$PYSIDE6_DIR"/QtPositioning*.so
-    rm -f "$PYSIDE6_DIR"/QtLocation*.so
-    rm -f "$PYSIDE6_DIR"/QtSerialBus*.so
-    rm -f "$PYSIDE6_DIR"/QtSerialPort*.so
-    rm -f "$PYSIDE6_DIR"/QtSql*.so
-    rm -f "$PYSIDE6_DIR"/QtTest*.so
-    rm -f "$PYSIDE6_DIR"/QtXml*.so
-    rm -f "$PYSIDE6_DIR"/QtSvg*.so
-    rm -f "$PYSIDE6_DIR"/QtOpenGL*.so
-    rm -f "$PYSIDE6_DIR"/QtPrintSupport*.so
-    rm -f "$PYSIDE6_DIR"/QtDesigner*.so
-    rm -f "$PYSIDE6_DIR"/QtUiTools*.so
-    rm -f "$PYSIDE6_DIR"/QtHelp*.so
-    rm -f "$PYSIDE6_DIR"/QtScxml*.so
-    rm -f "$PYSIDE6_DIR"/QtStateMachine*.so
-    rm -f "$PYSIDE6_DIR"/QtRemoteObjects*.so
-    rm -f "$PYSIDE6_DIR"/QtWebChannel*.so
-    rm -f "$PYSIDE6_DIR"/QtWebSockets*.so
-    rm -f "$PYSIDE6_DIR"/QtNfc*.so
-    rm -f "$PYSIDE6_DIR"/QtTextToSpeech*.so
-    rm -f "$PYSIDE6_DIR"/QtConcurrent*.so
+    # --- A) Qt 框架白名单(QtWidgets 应用最小依赖)---
+    # 保留:QtCore / QtGui / QtWidgets(核心),QtOpenGL(QtGui 渲染依赖),
+    #       QtSvg / QtDBus / QtNetwork(平台插件可能需要,体积都很小)。
+    QT_LIB="$PYSIDE6_DIR/Qt/lib"
+    KEEP_FW="QtCore QtGui QtWidgets QtOpenGL QtSvg QtDBus QtNetwork"
+    if [ -d "$QT_LIB" ]; then
+        echo "   Qt 框架目录:$QT_LIB"
+        # 删除所有 .framework,除了白名单
+        for fw in "$QT_LIB"/*.framework; do
+            [ -d "$fw" ] || continue
+            name=$(basename "$fw" .framework)
+            case " $KEEP_FW " in
+                *" $name "*) echo "   保留框架:$name" ;;
+                *) rm -rf "$fw"; echo "   删除框架:$name" ;;
+            esac
+        done
+        # 删除独立的 .dylib / .so / 静态库 / 链接描述文件
+        rm -f "$QT_LIB"/*.dylib "$QT_LIB"/*.so 2>/dev/null || true
+        rm -f "$QT_LIB"/*.a "$QT_LIB"/*.prl "$QT_LIB"/*.la "$QT_LIB"/*.cmake 2>/dev/null || true
+        # 删除 CMake / pkgconfig 元数据
+        rm -rf "$QT_LIB/cmake" "$QT_LIB/pkgconfig" "$QT_LIB/metatypes" 2>/dev/null || true
+        # 删除 QtWebEngineProcess 及其 Helper(若存在)
+        rm -rf "$QT_LIB/QtWebEngineCore.framework" 2>/dev/null || true
+        find "$QT_LIB" -name "QtWebEngineProcess*" -delete 2>/dev/null || true
+    fi
 
-    # 2) QML 目录(即便没用 Quick/Qml 也会被拷进来,通常几十 MB)
-    rm -rf "$PYSIDE6_DIR/qml"
-    rm -rf "$PYSIDE6_DIR/Qt/qml"
+    # --- B) Qt 资源目录(WebEngine 资源 icudtl.dat/locales ~数十 MB)---
+    rm -rf "$PYSIDE6_DIR/Qt/resources" 2>/dev/null || true
+    rm -rf "$PYSIDE6_DIR/Qt/translations" 2>/dev/null || true
+    rm -rf "$PYSIDE6_DIR/Qt/qml" 2>/dev/null || true
 
-    # 3) 翻译文件 .qm(GUI 用不到,数十 MB)
-    rm -rf "$PYSIDE6_DIR/translations"
-    rm -rf "$PYSIDE6_DIR/Qt/translations"
+    # --- C) PySide6 顶层资源 ---
+    rm -rf "$PYSIDE6_DIR/qml" 2>/dev/null || true
+    rm -rf "$PYSIDE6_DIR/translations" 2>/dev/null || true
+    rm -rf "$PYSIDE6_DIR/examples" 2>/dev/null || true
+    rm -rf "$PYSIDE6_DIR/include" 2>/dev/null || true
+    rm -rf "$PYSIDE6_DIR/Qt/include" 2>/dev/null || true
+    rm -rf "$PYSIDE6_DIR/Qt/mkspecs" 2>/dev/null || true
 
-    # 4) 资源 / 示例 / 文档
-    rm -rf "$PYSIDE6_DIR/examples"
-    rm -rf "$PYSIDE6_DIR/include"
-    rm -rf "$PYSIDE6_DIR/Qt/lib/QtWebEngineCore.framework" 2>/dev/null || true
+    # --- D) 删除被排除子模块的 .so(防止漏网)---
+    rm -f "$PYSIDE6_DIR"/QtWebEngine*.so \
+          "$PYSIDE6_DIR"/QtQml*.so \
+          "$PYSIDE6_DIR"/QtQuick*.so \
+          "$PYSIDE6_DIR"/Qt3D*.so \
+          "$PYSIDE6_DIR"/QtCharts*.so \
+          "$PYSIDE6_DIR"/QtDataVisualization*.so \
+          "$PYSIDE6_DIR"/QtPdf*.so \
+          "$PYSIDE6_DIR"/QtMultimedia*.so \
+          "$PYSIDE6_DIR"/QtBluetooth*.so \
+          "$PYSIDE6_DIR"/QtSensors*.so \
+          "$PYSIDE6_DIR"/QtPositioning*.so \
+          "$PYSIDE6_DIR"/QtLocation*.so \
+          "$PYSIDE6_DIR"/QtSerialBus*.so \
+          "$PYSIDE6_DIR"/QtSerialPort*.so \
+          "$PYSIDE6_DIR"/QtSql*.so \
+          "$PYSIDE6_DIR"/QtTest*.so \
+          "$PYSIDE6_DIR"/QtXml*.so \
+          "$PYSIDE6_DIR"/QtPrintSupport*.so \
+          "$PYSIDE6_DIR"/QtDesigner*.so \
+          "$PYSIDE6_DIR"/QtUiTools*.so \
+          "$PYSIDE6_DIR"/QtHelp*.so \
+          "$PYSIDE6_DIR"/QtScxml*.so \
+          "$PYSIDE6_DIR"/QtStateMachine*.so \
+          "$PYSIDE6_DIR"/QtRemoteObjects*.so \
+          "$PYSIDE6_DIR"/QtWebChannel*.so \
+          "$PYSIDE6_DIR"/QtWebSockets*.so \
+          "$PYSIDE6_DIR"/QtNfc*.so \
+          "$PYSIDE6_DIR"/QtTextToSpeech*.so \
+          "$PYSIDE6_DIR"/QtConcurrent*.so 2>/dev/null || true
 
-    # 5) Qt 插件:只保留 platforms / styles / imageformats / platforms
-    if [ -d "$PYSIDE6_DIR/plugins" ]; then
-        find "$PYSIDE6_DIR/plugins" -maxdepth 1 -mindepth 1 -type d \
+    # --- E) Qt 插件:只保留 platforms / styles / imageformats ---
+    for plugdir in "$PYSIDE6_DIR/plugins" "$PYSIDE6_DIR/Qt/plugins"; do
+        [ -d "$plugdir" ] || continue
+        find "$plugdir" -maxdepth 1 -mindepth 1 -type d \
             ! -name platforms \
             ! -name styles \
             ! -name imageformats \
             -exec rm -rf {} +
-    fi
-    # imageformats 里只留常用格式,删 svg / tiff / pdf 等插件
-    if [ -d "$PYSIDE6_DIR/plugins/imageformats" ]; then
-        rm -f "$PYSIDE6_DIR/plugins/imageformats"/libqsvg*
-        rm -f "$PYSIDE6_DIR/plugins/imageformats"/libqtiff*
-        rm -f "$PYSIDE6_DIR/plugins/imageformats"/libqpdf*
-        rm -f "$PYSIDE6_DIR/plugins/imageformats"/libqtga*
-        rm -f "$PYSIDE6_DIR/plugins/imageformats"/libqwbmp*
-        rm -f "$PYSIDE6_DIR/plugins/imageformats"/libqwebp*
-    fi
+        # imageformats 里只留 png/jpg/gif/bmp/ico,删 svg/tiff/pdf/webp 等
+        if [ -d "$plugdir/imageformats" ]; then
+            rm -f "$plugdir/imageformats"/libqsvg* \
+                  "$plugdir/imageformats"/libqtiff* \
+                  "$plugdir/imageformats"/libqpdf* \
+                  "$plugdir/imageformats"/libqtga* \
+                  "$plugdir/imageformats"/libqwbmp* \
+                  "$plugdir/imageformats"/libqwebp* \
+                  "$plugdir/imageformats"/libqheif* \
+                  "$plugdir/imageformats"/libqjp2* 2>/dev/null || true
+        fi
+    done
 fi
 
-# 6) PySide6 的 .pyi 类型存根文件(运行时不需要)
+# --- F) 全局清理:.pyi 存根 / .py 源码(py2app 已编译为 .pyc)---
 find "$APP/Contents/Resources" -name "*.pyi" -delete 2>/dev/null || true
-
-# 7) .pyc 之外的所有源码 .py 已被 py2app 编译;删除冗余的源文件
-#    (注意:保留包结构,只删纯源码文件)
 find "$APP/Contents/Resources" -name "*.py" -path "*/site-packages/*" -delete 2>/dev/null || true
 
-# 8) 对所有 Mach-O 二进制和动态库 strip 调试符号
+# --- G) strip 所有 Mach-O 二进制调试符号 ---
 echo "==> 瘦身:strip 二进制调试符号"
 while IFS= read -r -d '' f; do
-    # 仅对 Mach-O 文件 strip
     if file "$f" | grep -q "Mach-O"; then
         strip -ux "$f" 2>/dev/null || true
     fi
