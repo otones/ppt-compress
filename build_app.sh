@@ -13,6 +13,14 @@ APP_NAME="PPTXCompressor"
 APP="dist/${APP_NAME}.app"
 PY=python3
 
+# py2app 与 .app 打包仅在 macOS 上可用。
+if [ "$(uname -s)" != "Darwin" ]; then
+    echo "✗ 此脚本必须在 macOS 上运行(当前系统:$(uname -s))。" >&2
+    echo "  py2app 仅在 PyPI 提供 macOS wheel,在 Linux/Windows 上无法安装。" >&2
+    echo "  请在 Mac 上执行:./build_app.sh" >&2
+    exit 1
+fi
+
 echo "==> 创建构建虚拟环境 (./.venv-build)"
 $PY -m venv .venv-build
 # shellcheck disable=SC1091
