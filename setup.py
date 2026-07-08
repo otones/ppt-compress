@@ -48,7 +48,8 @@ PYSIDE6_EXCLUDES = [
 APP = ["run_gui.py"]
 OPTIONS = {
     "argv_emulation": False,
-    "semi_standalone": False,
+    "semi_standalone": False,   # 必须为 False:把完整 Python 运行时打进 .app
+    "site_packages": False,     # 不用系统 site-packages,保证完全自包含
     "strip": True,            # 剥离调试符号
     "iconfile": None,
     "plist": {

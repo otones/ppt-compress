@@ -49,10 +49,36 @@ fi
 
 echo "==> uv 版本:$(uv --version)"
 
-# 用 uv 创建指定 Python 3.12 的虚拟环境。
-# uv 会自动下载 Python 3.12(若本地没有),完全不依赖系统 Python 版本。
-echo "==> 创建虚拟环境 (./.venv-build)  [Python $PY_VERSION]"
-uv venv --python "$PY_VERSION" .venv-build
+# --- 关键:py2app 需要用 framework build 的 Python ---
+# py2app 生成的 .app 会嵌入 Python.framework 运行时。只有 python.org 官方
+# 安装包提供 framework build(路径形如 /Library/Frameworks/Python.framework/...),
+# Homebrew 和 uv 下载的 Python 都不是 framework build,会导致 .app 运行时报
+# "A Python runtime not could be located"。
+#
+# 因此优先查找系统已装的官方 framework Python 3.12;若没有,再用 uv 下载作为
+# 兜底(并提示用户:用 uv 的 Python 构建的 .app 可能无法独立运行,建议装官方包)。
+PY_VERSION="3.12"
+FW_PYTHON="/Library/Frameworks/Python.framework/Versions/${PY_VERSION}/bin/python${PY_VERSION}"
+VENV_PY=""
+
+if [ -x "$FW_PYTHON" ]; then
+    echo "==> 检测到官方 framework build Python:$FW_PYTHON"
+    VENV_PY="$FW_PYTHON"
+    # 用 uv 基于这个 Python 创建 venv(uv 会复用该解释器)
+    echo "==> 创建虚拟环境 (./.venv-build)  [Python $PY_VERSION framework]"
+    uv venv --python "$VENV_PY" .venv-build
+else
+    echo "⚠ 未检测到官方 framework build Python($FW_PYTHON 不存在)。" >&2
+    echo "  Homebrew / uv 下载的 Python 不是 framework build," >&2
+    echo "  py2app 用它构建的 .app 运行时可能报 \"A Python runtime not could be located\"。" >&2
+    echo "  强烈建议安装 python.org 官方安装包:" >&2
+    echo "    https://www.python.org/downloads/release/python-3120/" >&2
+    echo "  下载 macOS 64-bit universal2 installer 安装后重新运行此脚本。" >&2
+    echo "" >&2
+    echo "  现将用 uv 下载的 Python $PY_VERSION 作为兜底继续构建..." >&2
+    echo "==> 创建虚拟环境 (./.venv-build)  [Python $PY_VERSION (非 framework)]"
+    uv venv --python "$PY_VERSION" .venv-build
+fi
 
 # shellcheck disable=SC1091
 source .venv-build/bin/activate
