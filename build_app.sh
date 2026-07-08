@@ -3,6 +3,9 @@
 #
 #   ./build_app.sh
 #
+# 使用 uv 创建虚拟环境并指定 Python 3.12,不依赖系统 Python 版本。
+# uv 会自动下载所需 Python,首次运行需联网。
+#
 # 产出 dist/PPTXCompressor.app。在 macOS(Apple Silicon & Intel)测试通过。
 # 目标:最终 .app 体积 < 100MB。
 set -euo pipefail
@@ -11,7 +14,6 @@ cd "$(dirname "$0")"
 
 APP_NAME="PPTXCompressor"
 APP="dist/${APP_NAME}.app"
-PY=python3
 
 # py2app 与 .app 打包仅在 macOS 上可用。
 if [ "$(uname -s)" != "Darwin" ]; then
@@ -21,40 +23,50 @@ if [ "$(uname -s)" != "Darwin" ]; then
     exit 1
 fi
 
-# py2app 0.28 要求 Python >= 3.10;3.13 支持尚不稳定,推荐 3.11/3.12。
-PY_VERSION=$($PY -c 'import sys; print("%d.%d" % sys.version_info[:2])')
-PY_OK=$($PY -c 'import sys; print(1 if sys.version_info[:2] >= (3,10) else 0)')
-if [ "$PY_OK" != "1" ]; then
-    echo "✗ Python 版本过低(当前 $PY_VERSION),py2app 需要 Python >= 3.10。" >&2
-    echo "  推荐 Python 3.11 或 3.12。可用 brew 安装:" >&2
-    echo "    brew install python@3.12" >&2
-    echo "  然后用指定版本构建:PY=python3.12 ./build_app.sh" >&2
-    exit 1
-fi
-if [ "${PY_VERSION#3.}" -ge 13 ] 2>/dev/null; then
-    echo "⚠ 检测到 Python $PY_VERSION,py2app 对 3.13 支持尚不稳定。" >&2
-    echo "  如遇安装/构建问题,建议改用 Python 3.12:" >&2
-    echo "    brew install python@3.12 && PY=python3.12 ./build_app.sh" >&2
+# --- 使用 uv 管理 venv 与 Python 版本 ---
+# py2app 0.28 要求 Python >= 3.10;3.13 支持尚不稳定,固定使用 3.12。
+# uv 会自动下载对应版本的 Python,无需系统预装。
+PY_VERSION="3.12"
+
+# 确保 uv 可用:优先用 PATH 中的 uv;否则尝试 brew 安装路径;都没有就安装。
+if ! command -v uv >/dev/null 2>&1; then
+    if [ -x "/opt/homebrew/bin/uv" ]; then
+        export PATH="/opt/homebrew/bin:$PATH"
+    elif [ -x "/usr/local/bin/uv" ]; then
+        export PATH="/usr/local/bin:$PATH"
+    else
+        echo "==> 未检测到 uv,正在安装 uv..."
+        curl -LsSf https://astral.sh/uv/install.sh | sh
+        # 安装后 uv 通常位于 ~/.local/bin
+        export PATH="$HOME/.local/bin:$PATH"
+    fi
 fi
 
-echo "==> 创建构建虚拟环境 (./.venv-build)  [Python $PY_VERSION]"
-$PY -m venv .venv-build
+if ! command -v uv >/dev/null 2>&1; then
+    echo "✗ uv 安装失败,请手动安装:curl -LsSf https://astral.sh/uv/install.sh | sh" >&2
+    exit 1
+fi
+
+echo "==> uv 版本:$(uv --version)"
+
+# 用 uv 创建指定 Python 3.12 的虚拟环境。
+# uv 会自动下载 Python 3.12(若本地没有),完全不依赖系统 Python 版本。
+echo "==> 创建虚拟环境 (./.venv-build)  [Python $PY_VERSION]"
+uv venv --python "$PY_VERSION" .venv-build
+
 # shellcheck disable=SC1091
 source .venv-build/bin/activate
 
-# 关键:必须先升级 pip 再装依赖。旧版 pip(如 21.x)无法解析现代 wheel
-# 的 metadata,会报 "No matching distribution found"。
-echo "==> 升级 pip / setuptools / wheel"
-python -m pip install --upgrade pip setuptools wheel
-
-echo "==> 当前 pip 版本:"
-python -m pip --version
-
+# uv 的 pip 速度更快,且能正确解析现代 wheel metadata,避免旧版 pip
+# 报 "No matching distribution found" 的问题。
 echo "==> 安装构建依赖"
-python -m pip install -r requirements.txt py2app
+uv pip install --upgrade pip setuptools wheel
+uv pip install -r requirements.txt py2app
+uv pip install -e .
 
-echo "==> 以可编辑模式安装本包"
-python -m pip install -e .
+echo "==> 当前环境:"
+python --version
+python -m pip --version
 
 echo "==> 清理上次构建产物"
 rm -rf build dist
