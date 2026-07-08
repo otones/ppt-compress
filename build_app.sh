@@ -21,17 +21,40 @@ if [ "$(uname -s)" != "Darwin" ]; then
     exit 1
 fi
 
-echo "==> 创建构建虚拟环境 (./.venv-build)"
+# py2app 0.28 要求 Python >= 3.10;3.13 支持尚不稳定,推荐 3.11/3.12。
+PY_VERSION=$($PY -c 'import sys; print("%d.%d" % sys.version_info[:2])')
+PY_OK=$($PY -c 'import sys; print(1 if sys.version_info[:2] >= (3,10) else 0)')
+if [ "$PY_OK" != "1" ]; then
+    echo "✗ Python 版本过低(当前 $PY_VERSION),py2app 需要 Python >= 3.10。" >&2
+    echo "  推荐 Python 3.11 或 3.12。可用 brew 安装:" >&2
+    echo "    brew install python@3.12" >&2
+    echo "  然后用指定版本构建:PY=python3.12 ./build_app.sh" >&2
+    exit 1
+fi
+if [ "${PY_VERSION#3.}" -ge 13 ] 2>/dev/null; then
+    echo "⚠ 检测到 Python $PY_VERSION,py2app 对 3.13 支持尚不稳定。" >&2
+    echo "  如遇安装/构建问题,建议改用 Python 3.12:" >&2
+    echo "    brew install python@3.12 && PY=python3.12 ./build_app.sh" >&2
+fi
+
+echo "==> 创建构建虚拟环境 (./.venv-build)  [Python $PY_VERSION]"
 $PY -m venv .venv-build
 # shellcheck disable=SC1091
 source .venv-build/bin/activate
 
+# 关键:必须先升级 pip 再装依赖。旧版 pip(如 21.x)无法解析现代 wheel
+# 的 metadata,会报 "No matching distribution found"。
+echo "==> 升级 pip / setuptools / wheel"
+python -m pip install --upgrade pip setuptools wheel
+
+echo "==> 当前 pip 版本:"
+python -m pip --version
+
 echo "==> 安装构建依赖"
-pip install --upgrade pip >/dev/null
-pip install -r requirements.txt py2app >/dev/null
+python -m pip install -r requirements.txt py2app
 
 echo "==> 以可编辑模式安装本包"
-pip install -e . >/dev/null
+python -m pip install -e .
 
 echo "==> 清理上次构建产物"
 rm -rf build dist
