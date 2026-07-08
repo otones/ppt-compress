@@ -92,6 +92,10 @@ OPTIONS = {
 }
 
 setup(
+    name="PPTXCompressor",
+    version="1.0.0",
+    author="pptx-compressor",
+    license="MIT",
     app=APP,
     options={"py2app": OPTIONS},
 )

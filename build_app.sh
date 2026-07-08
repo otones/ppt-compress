@@ -60,20 +60,37 @@ source .venv-build/bin/activate
 # uv 的 pip 速度更快,且能正确解析现代 wheel metadata,避免旧版 pip
 # 报 "No matching distribution found" 的问题。
 echo "==> 安装构建依赖"
-# 关键:锁定 setuptools<81。setuptools 81+ 在检测到 pyproject.toml [project]
-# 表后,会拒绝 py2app 依赖的旧式 setup() 调用语义,报
-# "error: install_requires is no longer supported"。py2app 社区通用解法
-# 是构建时固定 setuptools<81。
-uv pip install --upgrade "pip<81" "setuptools<81" "wheel"
+uv pip install --upgrade pip setuptools wheel
 uv pip install -r requirements.txt py2app
-uv pip install -e .
 
 echo "==> 当前环境:"
 python --version
 python -m pip --version
+python -c "import setuptools; print('setuptools', setuptools.__version__)"
 
 echo "==> 清理上次构建产物"
 rm -rf build dist
+
+# 关键:py2app 与 pyproject.toml [project] 表不兼容。setuptools 检测到
+# [project] 表后,会拒绝 py2app 依赖的旧式 setup() 调用语义,报
+# "error: install_requires is no longer supported"。
+# 解法:构建期间临时把 pyproject.toml 移走,让 setuptools 只看 setup.py
+# (setup.py 已包含 py2app 所需的全部元数据)。构建后恢复。
+PYPROJECT_BACKUP=""
+if [ -f pyproject.toml ]; then
+    PYPROJECT_BACKUP="pyproject.toml.bak-py2app"
+    echo "==> 临时隔离 pyproject.toml(避免触发 setuptools [project] 冲突)"
+    mv pyproject.toml "$PYPROJECT_BACKUP"
+fi
+
+# 用 trap 确保无论构建成功失败都恢复 pyproject.toml
+restore_pyproject() {
+    if [ -n "$PYPROJECT_BACKUP" ] && [ -f "$PYPROJECT_BACKUP" ]; then
+        mv "$PYPROJECT_BACKUP" pyproject.toml
+        echo "==> 已恢复 pyproject.toml"
+    fi
+}
+trap restore_pyproject EXIT
 
 echo "==> 运行 py2app(已配置 strip + 排除大量 Qt 子模块)"
 python setup.py py2app
